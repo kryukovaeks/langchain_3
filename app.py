@@ -1,4 +1,5 @@
 import streamlit as st
+import openai
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
@@ -10,6 +11,9 @@ from langchain.chains import ConversationalRetrievalChain
 from htmlTemplates import css, bot_template, user_template
 from langchain.llms import HuggingFaceHub
 
+# Load environment variables from .env file
+load_dotenv()
+
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
@@ -17,7 +21,6 @@ def get_pdf_text(pdf_docs):
         for page in pdf_reader.pages:
             text += page.extract_text()
     return text
-
 
 def get_text_chunks(text):
     text_splitter = CharacterTextSplitter(
@@ -29,17 +32,15 @@ def get_text_chunks(text):
     chunks = text_splitter.split_text(text)
     return chunks
 
-
 def get_vectorstore(text_chunks):
     embeddings = OpenAIEmbeddings()
     # embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
     vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
     return vectorstore
 
-
-def get_conversation_chain(vectorstore):
-    llm = ChatOpenAI()
-    # llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
+def get_conversation_chain(vectorstore, openai_api_key):
+    # Instantiate the OpenAI Chat model
+    llm = ChatOpenAI(openai_api_key)
 
     memory = ConversationBufferMemory(
         memory_key='chat_history', return_messages=True)
@@ -50,55 +51,52 @@ def get_conversation_chain(vectorstore):
     )
     return conversation_chain
 
+def handle_userinput(user_question, conversation):
+    response = conversation({'question': user_question})
+    chat_history = response['chat_history']
 
-def handle_userinput(user_question):
-    response = st.session_state.conversation({'question': user_question})
-    st.session_state.chat_history = response['chat_history']
-
-    for i, message in enumerate(st.session_state.chat_history):
+    for i, message in enumerate(chat_history):
         if i % 2 == 0:
-            st.write(user_template.replace(
-                "{{MSG}}", message.content), unsafe_allow_html=True)
+            st.write(user_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
         else:
-            st.write(bot_template.replace(
-                "{{MSG}}", message.content), unsafe_allow_html=True)
-
+            st.write(bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
 
 def main():
-    load_dotenv()
-    st.set_page_config(page_title="Chat with multiple PDFs",
-                       page_icon=":books:")
-    st.write(css, unsafe_allow_html=True)
+    openai_api_key = st.text_input("Enter OpenAI API Key", type="password")
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
+    if openai_api_key:
+        st.write("API Key set successfully!")
+        st.session_state.openai_api_key = openai_api_key
 
-    st.header("Chat with multiple PDFs :books:")
-    user_question = st.text_input("Ask a question about your documents:")
-    if user_question:
-        handle_userinput(user_question)
+    if "openai_api_key" in st.session_state:
+        openai_api_key = st.session_state.openai_api_key
 
-    with st.sidebar:
-        st.subheader("Your documents")
-        pdf_docs = st.file_uploader(
-            "Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
-        if st.button("Process"):
-            with st.spinner("Processing"):
-                # get pdf text
-                raw_text = get_pdf_text(pdf_docs)
+        # Set up OpenAI API credentials
+        openai.api_key = openai_api_key
 
-                # get the text chunks
-                text_chunks = get_text_chunks(raw_text)
+        load_dotenv()
+        st.set_page_config(page_title="Chat with multiple PDFs", page_icon=":books:")
+        st.write(css, unsafe_allow_html=True)
 
-                # create vector store
-                vectorstore = get_vectorstore(text_chunks)
+        st.header("Chat with multiple PDFs :books:")
+        user_question = st.text_input("Ask a question about your documents:")
+        if user_question:
+            conversation = st.session_state.conversation
+            handle_userinput(user_question, conversation)
 
-                # create conversation chain
-                st.session_state.conversation = get_conversation_chain(
-                    vectorstore)
+        with st.sidebar:
+            st.subheader("Your documents")
+            pdf_docs = st.file_uploader("Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
+            if st.button("Process"):
+                with st.spinner("Processing"):
+                    raw_text = get_pdf_text(pdf_docs)
+                    text_chunks = get_text_chunks(raw_text)
+                    vectorstore = get_vectorstore(text_chunks)
+                    conversation = get_conversation_chain(vectorstore, openai_api_key)
+                    st.session_state.conversation = conversation
 
+    else:
+        st.warning("Please enter your OpenAI API key.")
 
 if __name__ == '__main__':
     main()
